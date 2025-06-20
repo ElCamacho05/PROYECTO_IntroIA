@@ -13,78 +13,89 @@ from os import system
 from utils import d, show_graph, show_path, show_menu, show_score
 
 from sklearn.preprocessing import StandardScaler
-
 from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import MinMaxScaler
 
 
 class MyGame:
     def __init__(self):
+        """
+        Inicializa la instancia principal del juego:
+        - Configura Pygame y la pantalla.
+        - Crea las entidades principales (nave, ballena).
+        - Genera obstáculos y grafos para pathfinding.
+        - Inicializa variables para IA, puntuación, y estados de juego.
+        """
         pygame.init()
 
-        # call the settings from existing settings class
+        # Carga configuraciones generales del juego
         self.settings = Settings()
 
-        # define screen settings
+        # Configura la pantalla con las dimensiones definidas en settings
         self.screen = pygame.display.set_mode((self.settings.screen_width, self.settings.screen_height))
-        # self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+        # Ajusta los valores de ancho y alto para que sean consistentes con la pantalla real
         self.settings.screen_width = self.screen.get_width()
         self.settings.screen_height = self.screen.get_height()
-        self.settings.show_path = False
-        self.settings.show_graph = False
+        self.settings.show_path = False  # Control para mostrar o no la ruta
+        self.settings.show_graph = False  # Control para mostrar o no el grafo
 
-        # instance ship (player)
+        # Instancia la nave controlada por el jugador
         self.ship = Ship(self)
 
-        # instance whale
+        # Instancia la ballena controlada por IA
         self.whale = Whale(self)
 
-        # player / IA
+        # Variables que determinan quién es jugador y quién IA (pueden intercambiarse)
         self.player = self.ship
         self.not_player = self.whale
-        self.score = 0
+        self.score = 0  # Puntuación inicial
 
-        # temporal for obstacle generation
+        # Para la generación de obstáculos, excluye las posiciones de nave y ballena
         rects = [self.ship.rect, self.whale.rect]
-        # define obstacles
         self.obstacles = []
         screen_range = [self.settings.screen_width - self.settings.obstacle_size[0],
                         self.settings.screen_height - self.settings.obstacle_size[1]]
+
+        # Genera los obstáculos en el mapa evitando colisiones con nave y ballena
         generate_obstacles(self.settings.total_obstacles, screen_range, rects, self)
 
-        # display title
+        # Define el título de la ventana
         pygame.display.set_caption("PROYECTO - IA")
 
-        # graph generation
+        # Genera el grafo de nodos para pathfinding, con 200 nodos
         print("Generando mundo")
         self.nodes, self.graph = gen_graph(self, 200)
         print("Grafo generado...")
 
-        # pause
-        self.pause = True
+        self.pause = True  # Estado de pausa inicial
 
-        # dataset
+        # Variables para almacenamiento de datos para IA
         self.set = []
         self.X = []
         self.y = []
 
-        # stages
-        self.stage = 1
+        self.stage = 1  # Etapa inicial del juego (definida para controlar la lógica)
 
-        # scaler (for AI)
+        # Escaladores y modelo para el entrenamiento de IA
         self.scaler_x = StandardScaler()
         self.scaler_y = StandardScaler()
         self.model = None
-        # self.parallel_training()
 
     def gen_dataset_legacy(self):
+        """
+        Genera un dataset en formato antiguo basado en el conjunto self.set.
+        Este dataset contiene las posiciones del mapa, obstáculos, punto inicio (home), objetivo (goal) y caminos.
+
+        Retorna:
+            X (lista): datos de entrada (posiciones concatenadas).
+            y (lista): datos de salida (caminos representados por posiciones).
+        """
         X = []
         y = []
 
         static = []
         if self.set:
             static += [coord for pos in self.set[0]["map"] for coord in pos]
-            # static += [coord for obs in self.set[0]["obstacles"] for coord in obs]
 
         for entry in self.set:
             row = static.copy()
@@ -107,6 +118,17 @@ class MyGame:
         return X, y
 
     def gen_dataset(self, s):
+        """
+        Genera dataset moderno a partir de un conjunto dado con diccionarios que incluyen
+        mapa, home, goal y camino.
+
+        Args:
+            s (lista): lista de diccionarios con los datos.
+
+        Retorna:
+            X (lista): datos de entrada.
+            y (lista): datos de salida (caminos).
+        """
         X = []
         y = []
 
@@ -118,9 +140,6 @@ class MyGame:
                 if k == "map":
                     for node in v:
                         row_x += node
-                # elif k == "obstacles":
-                #     for obs in v:
-                #         row_x += obs
                 elif k == "home":
                     row_x += v
                 elif k == "goal":
@@ -137,6 +156,16 @@ class MyGame:
         return X, y
 
     def gen_synthetic_samples_legacy_1(self, sample_count=200):
+        """
+        Genera muestras sintéticas (versión legacy) para entrenamiento,
+        asegurando que posiciones de ballena, nave y obstáculos no colisionen.
+
+        Args:
+            sample_count (int): número deseado de muestras sintéticas.
+
+        Retorna:
+            X_n, y_n: datasets de entrada y salida para entrenamiento.
+        """
         print("generando ejemplos")
         synthetic_set = []
 
@@ -175,7 +204,6 @@ class MyGame:
                 "obstacles": [obs.rect.center for obs in self.obstacles],
                 "home": w.center,
                 "goal": ship_rect.center,
-                # "path": [nodo.pos for nodo in path]
                 "path": [path[1].pos]
             }
             synthetic_set.append(new_entry)
@@ -184,13 +212,23 @@ class MyGame:
         return X_n, y_n
 
     def gen_synthetic_samples(self, sample_count=200):
+        """
+        Genera muestras sintéticas modernas para entrenamiento de la IA,
+        evitando colisiones y garantizando caminos válidos.
+
+        Args:
+            sample_count (int): número deseado de muestras sintéticas.
+
+        Retorna:
+            X_n, y_n: datasets de entrada y salida para entrenamiento.
+        """
         print("generando ejemplos sinteticos")
         set_t = []
 
         print(len(set_t))
         while len(set_t) < sample_count:
             if len(set_t) % 10 == 0:
-                print(f"{int(len(set_t)/sample_count*100)} % ")
+                print(f"{int(len(set_t) / sample_count * 100)} % ")
             rects = [obs.rect for obs in self.obstacles]
 
             whale = pygame.Rect(0, 0, Settings().whale_size[0], Settings().whale_size[1])
@@ -213,7 +251,6 @@ class MyGame:
                 continue
             new_entry = {
                 "map": [nodo.pos for nodo in self.nodes],
-                # "obstacles": [obs.rect.center for obs in self.obstacles],
                 "home": whale.center,
                 "goal": ship.center,
                 "path": [nodo.pos for nodo in path]
@@ -224,6 +261,13 @@ class MyGame:
         return X_n, y_n
 
     def train_AI(self):
+        """
+        Entrena el modelo de IA utilizando muestras sintéticas generadas en tiempo real.
+        Usa una red neuronal MLP con múltiples capas y escaladores MinMax.
+
+        Retorna:
+            model: modelo entrenado.
+        """
         print("Entrenando IA...")
 
         scaler_x = MinMaxScaler()
@@ -236,9 +280,11 @@ class MyGame:
         X_scaled = scaler_x.fit_transform(self.X)
         y_scaled = scaler_y.fit_transform(self.y)
 
+        # Definición del modelo MLP con arquitectura profunda
         model = MLPRegressor(hidden_layer_sizes=(256, 128, 64, 32, 16), max_iter=4000)
         model.fit(X_scaled, y_scaled)
 
+        # Asigna el modelo y escaladores a la nave para uso posterior
         self.ship.model = model
         self.ship.scaler_x = scaler_x
         self.ship.scaler_y = scaler_y
@@ -248,77 +294,93 @@ class MyGame:
         return self.ship.model
 
     def parallel_training(self):
+        """
+        Ejecuta el entrenamiento de la IA en un hilo paralelo para no bloquear el hilo principal.
+        """
+
         def run():
             print("entrenando IA en segundo plano...")
             model = self.train_AI()
             print("IA entrenada!!!")
             return model
+
         self.ship.path_model = threading.Thread(target=run)
         self.ship.path_model.start()
 
     def run_game(self):
-        # self._update_screen()
+        """
+        Bucle principal del juego que maneja:
+        - Eventos (teclado, cierre).
+        - Actualización de estado y pantalla.
+        - Lógica de juego según la etapa actual.
+        """
         while True:
             self._check_events()
             self._update_screen()
-            if self.stage == 1:  # whale (AI) -> boat (player)
+
+            if self.stage == 1:  # Etapa 1: ballena IA persigue nave jugador
                 if not self.pause:
+                    # Verifica colisión para cambiar etapa y reiniciar condiciones
                     if self.whale.rect.colliderect(self.ship.rect):
                         print("TE HAN ALCANZADO... moviendo a la etapa 2...")
                         self.pause = True
                         self.stage = 2
 
-                        # dataset generation and ai training
+                        # Genera dataset y entrena IA para la nueva etapa
                         self.X, self.y = self.gen_dataset(self.set)
                         self.train_AI()
 
-                        # reset whale
+                        # Reposiciona ballena y nave a posiciones iniciales
                         self.whale.rect.topright = self.whale.screen_rect.topright
                         self.whale.position = list(self.whale.rect.center)
 
-                        # reset ship
                         self.ship.rect.bottomleft = self.ship.screen_rect.bottomleft
                         self.ship.position = list(self.ship.rect.center)
 
-                        # change speed
+                        # Ajusta velocidades para la nueva etapa
                         diff = self.settings.whale_speed - self.settings.ship_speed
                         self.settings.whale_speed -= diff
                         self.settings.ship_speed += diff
 
-                        # change players character
+                        # Intercambia control de jugador y IA
                         self.player = self.whale
                         self.not_player = self.ship
 
+                    # Actualiza movimientos y lógica de ambos jugadores
                     self.ship.update_player(self)
-
                     self.whale.update_AI(self, "a*")
 
-                    # self._update_screen()
-
-            if self.stage == 2:  # boat (AI) -> whale (player)
-                # print("entrando a la etappa 2")
+            if self.stage == 2:  # Etapa 2: nave IA persigue ballena jugador
                 if not self.pause:
                     if self.whale.rect.colliderect(self.ship.rect):
                         print("TE HAN ALCANZADO... moviendo a la etapa 2...")
                         self.pause = True
-                    # print("jugando la etapa 2")
                     self.ship.update_AI(self)
                     self.whale.update_player(self)
 
     def _check_events(self):
+        """
+        Escucha eventos de Pygame como teclado o cierre de ventana.
+        """
         for event in pygame.event.get():
-            # keyboard/mouse events
             if event.type == pygame.QUIT:
                 sys.exit()
-
             elif event.type == pygame.KEYDOWN:
                 self._chek_keydown(event)
-
             elif event.type == pygame.KEYUP:
                 self._chek_keyup(event)
 
     def _chek_keydown(self, event):
-        """Key presses"""
+        """
+        Procesa pulsaciones de teclas para controlar el movimiento o funciones especiales.
+
+        Teclas:
+            Flechas o WASD -> movimiento.
+            E -> alternar visualización del grafo.
+            R -> alternar visualización de la ruta.
+            P o ESC -> pausar o reanudar.
+            Q -> salir del juego y limpiar consola.
+        """
         if event.key == pygame.K_UP or event.key == pygame.K_w:
             self.player.moving_up = True
         elif event.key == pygame.K_DOWN or event.key == pygame.K_s:
@@ -338,11 +400,12 @@ class MyGame:
             self.pause = not self.pause
         elif event.key == pygame.K_q:
             system("cls")
-
             sys.exit()
 
     def _chek_keyup(self, event):
-        """Key releases"""
+        """
+        Procesa la liberación de teclas para detener movimientos.
+        """
         if event.key == pygame.K_UP or event.key == pygame.K_w:
             self.player.moving_up = False
         elif event.key == pygame.K_DOWN or event.key == pygame.K_s:
@@ -351,12 +414,15 @@ class MyGame:
             self.player.moving_right = False
         elif event.key == pygame.K_LEFT or event.key == pygame.K_a:
             self.player.moving_left = False
-        # elif event.key == pygame.K_e:
-        #     self.settings.show_graph = not self.settings.show_graph
-        # elif event.key == pygame.K_r:
-        #     self.settings.show_path = not self.settings.show_path
 
     def _update_screen(self):
+        """
+        Redibuja todos los elementos de la pantalla en cada frame:
+        - Fondo, obstáculos, nave, ballena.
+        - Muestra puntuación, grafo y ruta si están activados.
+        - Muestra menú de pausa si está pausado.
+        - Actualiza la pantalla con pygame.display.flip().
+        """
         self.screen.fill(self.settings.bg_color)
         for obstacle in self.obstacles:
             obstacle.blit()

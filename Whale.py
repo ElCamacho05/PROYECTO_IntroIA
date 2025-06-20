@@ -5,141 +5,163 @@ import threading
 
 
 class Whale:
+    """
+    Clase que representa la ballena enemiga en el juego.
+
+    La ballena puede moverse, calcular rutas para perseguir la nave del jugador usando
+    algoritmos de pathfinding (como A*), y actualizar su posición en base a la IA seleccionada.
+    """
+
     def __init__(self, game):
-        self.screen = game.screen
-        self.screen_rect = game.screen.get_rect()
+        """
+        Inicializa la ballena con referencias a la pantalla, configuraciones y carga su imagen.
 
-        # Settings
-        self.settings = game.settings
+        Args:
+            game: Instancia principal del juego que contiene pantalla, configuraciones y objetos.
+        """
+        self.screen = game.screen  # Pantalla donde se dibuja la ballena
+        self.screen_rect = game.screen.get_rect()  # Rectángulo límite de la pantalla
 
-        # ship image and in screen position
+        self.settings = game.settings  # Configuraciones globales del juego
+
+        # Carga y escala la imagen de la ballena
         self.image = pygame.image.load('images/whale.png')
         self.image = pygame.transform.scale(self.image, self.settings.whale_size)
+
+        # Obtiene el rectángulo que delimita la imagen para posicionarla y detectar colisiones
         self.rect = self.image.get_rect()
+
+        # Inicialmente la posiciona en la esquina superior derecha de la pantalla
         self.rect.topright = self.screen_rect.topright
+
+        # Posición central actual como lista mutable [x, y]
         self.position = list(self.rect.center)
 
-        self.path = []
-        self.max_path = 5
-        self.path_positions = []
-        self.current_target_index = 0
+        # Atributos para pathfinding y movimiento
+        self.path = []  # Lista de nodos del camino calculado
+        self.max_path = 5  # Máximo número de nodos para planificar ruta parcial
+        self.path_positions = []  # Lista de posiciones detalladas a lo largo del camino
+        self.current_target_index = 0  # Índice del nodo objetivo actual en el camino
 
-        # for threading
-        self.recalculating = False
-        self.path_thread = None
-        self.move = False
+        # Variables para manejo de threading (calcular rutas en segundo plano)
+        self.recalculating = False  # Indica si está recalculando la ruta actualmente
+        self.path_thread = None  # Hilo para calcular ruta
+        self.move = False  # Controla si la ballena debe moverse
 
-        # Keyboard events
+        # Variables para detectar eventos de teclado (movimiento manual)
         self.moving_up = False
         self.moving_down = False
         self.moving_right = False
         self.moving_left = False
 
     def set_pos(self, position):
+        """
+        Actualiza la posición de la ballena y sincroniza su rectángulo.
+
+        Args:
+            position (list or tuple): Nueva posición (x, y).
+        """
         self.position = position
         self.rect.center = position
 
     def calculate_path_async(self, game):
+        """
+        Inicia un hilo para calcular la ruta hacia la nave sin bloquear el hilo principal.
+
+        Usa la función `get_path` para obtener el camino desde la ballena hasta la nave.
+
+        Args:
+            game: Instancia principal del juego.
+        """
         def run():
-            self.recalculating = True
-            self.move = False
+            self.recalculating = True  # Marca que está calculando
+            self.move = False  # Detiene movimiento durante cálculo
+
+            # Obtiene lista de nodos que representan el camino
             path_nodes = get_path(game, game.whale.rect.center, game.ship.rect.center)
 
             if path_nodes:
+                # Guarda datos del mapa, ruta, inicio y meta para análisis/debug
                 new_entry = {
                     "map": [nodo.pos[:] for nodo in game.nodes],
-                    # "obstacles": [obs.rect.center[:] for obs in game.obstacles],
                     "home": game.whale.rect.center[:],
                     "goal": game.ship.rect.center[:],
-                    # "path": [nodo.pos[:] for nodo in path_nodes]
-                    "path": [path_nodes[1].pos]
-
+                    "path": [path_nodes[1].pos]  # Nodo siguiente al inicio
                 }
-                # print(new_entry)
                 game.set.append(new_entry)
 
+                # Convierte los nodos a posiciones y reinicia el índice del objetivo
                 self.path = [node.pos for node in path_nodes]
                 self.current_target_index = 0
-                # print("camino: ", self.path)
+
+                # Genera posiciones detalladas para moverse suavemente a lo largo del camino
                 self.gen_next_route(self.max_path)
 
             else:
                 print("no se pudo generar una ruta")
-            self.recalculating = False
-            self.move = True
 
+            self.recalculating = False  # Marca que terminó el cálculo
+            self.move = True  # Permite movimiento
+
+        # Inicia el hilo para el cálculo de ruta
         self.path_thread = threading.Thread(target=run)
         self.path_thread.start()
 
     def simple_pursue(self, game):
+        """
+        Movimiento básico para perseguir la nave con movimiento directo y evitando obstáculos simples.
+
+        La ballena intenta moverse en dirección a la nave por separado en ejes X e Y,
+        verificando colisiones contra obstáculos antes de moverse.
+
+        Args:
+            game: Instancia principal del juego.
+        """
         ship = game.ship
         obstacles = game.obstacles
+
+        # Movimiento vertical hacia arriba si la ballena está por debajo de la nave
         if self.position[1] > ship.position[1] and self.rect.bottom > self.settings.ship_size[1]:
             future_rect = self.rect.copy()
             future_rect.y = self.position[1] - self.settings.ship_speed
             if not any(future_rect.colliderect(ob.rect) for ob in obstacles):
                 self.position[1] -= self.settings.ship_speed
 
+        # Movimiento vertical hacia abajo si la ballena está por encima de la nave
         elif self.position[1] < ship.position[1] and self.rect.bottom < self.screen_rect.bottom:
             future_rect = self.rect.copy()
             future_rect.y = self.position[1] + self.settings.ship_speed
             if not any(future_rect.colliderect(ob.rect) for ob in obstacles):
                 self.position[1] += self.settings.ship_speed
 
+        # Movimiento horizontal hacia la derecha si la ballena está a la izquierda de la nave
         if self.position[0] < ship.position[0] and self.rect.right < self.screen_rect.right:
             future_rect = self.rect.copy()
             future_rect.x = self.position[0] + self.settings.ship_speed
             if not any(future_rect.colliderect(ob.rect) for ob in obstacles):
                 self.position[0] += self.settings.ship_speed
 
+        # Movimiento horizontal hacia la izquierda si la ballena está a la derecha de la nave
         elif self.position[0] > ship.position[0] and self.rect.left > 0:
             future_rect = self.rect.copy()
             future_rect.x = self.position[0] - self.settings.ship_speed
             if not any(future_rect.colliderect(ob.rect) for ob in obstacles):
                 self.position[0] -= self.settings.ship_speed
 
+        # Actualiza el rectángulo de la ballena a la nueva posición
         self.set_pos(self.position)
 
-    def move_to_pos_legacy(self):
-        if not self.path or self.current_target_index >= len(self.path):
-            return
-
-        target = self.path[self.current_target_index]
-        x, y = self.position
-        dx = target[0] - x
-        dy = target[1] - y
-        dist = (dx ** 2 + dy ** 2) ** 0.5
-
-        if dist < 2:
-            self.current_target_index += 1
-            return
-
-        dx /= dist
-        dy /= dist
-
-        speed = self.settings.whale_speed
-        x += dx * speed
-        y += dy * speed
-
-        self.set_pos([x, y])
-
-    def gen_next_route_legacy(self):
-        current_pos = self.position
-        meta = self.path.pop(0)
-
-        dx = abs(meta[0] - current_pos[0])
-        dy = abs(meta[1] - current_pos[1])
-        num = max(
-            int(dx / self.settings.whale_speed),
-            int(dy / self.settings.whale_speed),
-            1
-        )
-        x_arr = np.linspace(current_pos[0], meta[0], num)
-        y_arr = np.linspace(current_pos[1], meta[1], num)
-        self.path_positions += [list(par) for par in zip(x_arr, y_arr)]
-
     def gen_next_route(self, m=5):
+        """
+        Genera posiciones interpoladas para los próximos `m` nodos del camino actual.
+
+        Esto permite planificar y mover la ballena suavemente por tramos del camino calculado.
+
+        Args:
+            m (int): Número máximo de nodos a planificar en esta generación de ruta.
+        """
         current_pos = self.position
+        # Itera por hasta m nodos siguientes del camino
         for i, node in enumerate(self.path[:min(len(self.path), m)]):
             dx = abs(node[0] - current_pos[0])
             dy = abs(node[1] - current_pos[1])
@@ -151,14 +173,26 @@ class Whale:
             x_arr = np.linspace(current_pos[0], node[0], num)
             y_arr = np.linspace(current_pos[1], node[1], num)
             self.path_positions += [list(par) for par in zip(x_arr, y_arr)]
-            current_pos = node
+            current_pos = node  # Actualiza posición para el siguiente nodo
 
     def update_AI(self, game, t="s"):
+        """
+        Actualiza el comportamiento y movimiento de la ballena según el tipo de IA seleccionado.
+
+        - 's': Movimiento simple directo hacia la nave.
+        - 'a*': Movimiento usando cálculo de ruta con A* y seguimiento del camino.
+
+        Args:
+            game: Instancia principal del juego.
+            t (str): Tipo de IA ('s' para simple, 'a*' para pathfinding).
+        """
         if t == "s":
             self.simple_pursue(game)
 
         elif t == "a*":
             need_new_path = False
+
+            # Decide si es necesario recalcular ruta
             if not self.path:
                 need_new_path = True
             elif not self.path_positions:
@@ -166,18 +200,28 @@ class Whale:
             elif d(self.path[-1], game.ship.position) > 100:
                 need_new_path = True
 
+            # Si debe recalcular y no está ya en proceso, lanza cálculo
             if need_new_path and not self.recalculating:
                 self.path_positions = []
                 self.calculate_path_async(game)
 
+            # Si hay posiciones generadas y puede moverse, avanza al siguiente punto
             if self.path_positions and self.move:
                 next_pos = self.path_positions.pop(0)
                 self.set_pos(next_pos)
-            # elif self.path:
-            #     self.gen_next_route()
 
     def update_player(self, game):
+        """
+        Actualiza la posición de la ballena en base a entradas del jugador (movimiento manual).
+
+        Se asegura que la ballena no colisione con obstáculos y que permanezca dentro de la pantalla.
+
+        Args:
+            game: Instancia principal del juego.
+        """
         obstacles = game.obstacles
+
+        # Movimiento hacia arriba si la tecla está activa y no colisiona
         if self.moving_up and self.rect.bottom > self.settings.ship_size[1]:
             future_rect = self.rect.copy()
             future_rect.centery = self.position[1] - self.settings.ship_speed
@@ -185,6 +229,7 @@ class Whale:
                 self.position[1] -= self.settings.ship_speed
                 game.score += self.settings.whale_speed
 
+        # Movimiento hacia abajo
         if self.moving_down and self.rect.bottom < self.screen_rect.bottom:
             future_rect = self.rect.copy()
             future_rect.centery = self.position[1] + self.settings.ship_speed
@@ -192,6 +237,7 @@ class Whale:
                 self.position[1] += self.settings.ship_speed
                 game.score += self.settings.whale_speed
 
+        # Movimiento hacia derecha
         if self.moving_right and self.rect.right < self.screen_rect.right:
             future_rect = self.rect.copy()
             future_rect.centerx = self.position[0] + self.settings.ship_speed
@@ -199,6 +245,7 @@ class Whale:
                 self.position[0] += self.settings.ship_speed
                 game.score += self.settings.whale_speed
 
+        # Movimiento hacia izquierda
         if self.moving_left and self.rect.left > 0:
             future_rect = self.rect.copy()
             future_rect.centerx = self.position[0] - self.settings.ship_speed
@@ -206,48 +253,11 @@ class Whale:
                 self.position[0] -= self.settings.ship_speed
                 game.score += self.settings.whale_speed
 
+        # Actualiza la posición del rectángulo para el siguiente frame
         self.rect.center = self.position
 
-    def update_legacy_1(self, game, t="s"):
-        if t == "s":
-            self.simple_pursue(game)
-        elif t == "a*":
-            # Recalculate path if reached the end or ship moved significantly
-            # if len(self.path) == 0 or len(self.path_positions) == 0:
-            # if len(self.path) == 0:
-            if len(self.path_positions) == 0:
-                # d_end_ship = d(game.ship.position, self.path_positions[-1])
-                # if self.path_positions[-1]:
-                path_nodes = get_path(game, game.whale.rect.center, game.ship.rect.center)
-                self.path = path_nodes
-
-            # if (not self.path or self.current_target_index >= len(self.path)) and not self.recalculating:
-            #     self.calculate_path_async(game)
-
-            self.gen_next_route(self.settings.whale_speed)
-            next_pos = self.path_positions.pop(0)
-            self.position = next_pos
-            self.rect.x = self.position[0]
-            self.rect.y = self.position[1]
-
-    def update_legacy_2(self, game, t="s"):
-        if t == "s":
-            self.simple_pursue(game)
-        elif t == "a*":
-            if not self.path or self.current_target_index >= len(self.path) or \
-                    ((game.ship.position - self.path[-1][0]) ** 2 + (
-                            game.ship.position - self.path[-1][1]) ** 2) ** 0.5 > 50:
-                path_nodes = get_path(game, game.whale.rect.center, game.ship.rect.center)
-                if path_nodes:
-                    self.path = [node.pos for node in path_nodes]
-                    self.current_target_index = 0
-                    print("Nueva ruta generada:", self.path)
-                else:
-                    print("No se pudo generar una ruta")
-            self.move_to_pos_legacy()
-            # self.move_to_pos(game.ship.rect.center)
-            # nxt = self.path.pop(0)
-            # self.set_pos(nxt)
-
     def blit(self):
+        """
+        Dibuja la ballena en pantalla en su posición actual.
+        """
         self.screen.blit(self.image, self.rect)
